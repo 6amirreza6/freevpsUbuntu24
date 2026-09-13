@@ -1,0 +1,538 @@
+name: Ubuntu SSH via Tailscale (Full 33 Hours Persistent Workspace)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  session-1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set Up User & Workspace
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_ID: ${{ github.run_id }}
+        REPO: ${{ github.repository }}
+      run: |
+        echo "runner:root" | sudo chpasswd
+        sudo useradd -m -s /bin/bash root || true
+        echo "root:root" | sudo chpasswd
+        sudo usermod -aG sudo root
+        sudo mkdir -p /home/6amirreza6/workspace
+        echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
+        sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
+        sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config || true
+        echo "PasswordAuthentication yes" | sudo tee /etc/ssh/sshd_config.d/99-password-auth.conf || true
+        sudo systemctl restart ssh || sudo service ssh restart || true
+        
+        # Create stop-all command with delay for proper cancellation
+        sudo bash -c "cat << 'EOF' > /usr/local/bin/stop-all
+        #!/bin/bash
+        echo 'Canceling all sessions and stopping workflow...'
+        curl -s -X POST -H 'Authorization: token $GH_TOKEN' -H 'Accept: application/vnd.github.v3+json' 'https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/cancel'
+        sleep 4
+        sudo pkill -9 -f sleep || true
+        EOF"
+        sudo chmod +x /usr/local/bin/stop-all
+
+    - name: Restore Workspace Data (Initial Repo Backup)
+      run: |
+        if [ -f workspace-backup.tar.gz ]; then
+          echo "Restoring initial backup from Repository file..."
+          sudo tar -xzf workspace-backup.tar.gz -C /home/6amirreza6/
+        else
+          echo "No repository backup file found, starting with empty workspace."
+        fi
+        sudo chown -R root:root /home/6amirreza6/workspace
+
+    - name: Connect Tailscale
+      env:
+        TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      run: |
+        curl -fsSL https://tailscale.com/install.sh | sh
+        sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session1-run-${{ github.run_id }}"
+        
+        echo "در حال تثبیت شبکه Tailscale..."
+        sleep 10
+        
+        TS_IP=$(tailscale ip -4)
+        echo "=========================================="
+        echo "SSH Connection Details (Session 1):"
+        echo "IP: $TS_IP"
+        echo "User: root"
+        echo "Password: root"
+        echo "SSH Command: ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o StrictHostKeyChecking=no root@$TS_IP"
+        echo "To stop ALL sessions type: stop-all"
+        echo "To skip to NEXT session type: touch /tmp/skip_timer"
+        echo "=========================================="
+
+    - name: Keep Alive & Live Timer (5.5 Hours)
+      run: |
+        TOTAL_SECONDS=19800
+        while [ $TOTAL_SECONDS -gt 0 ]; do
+          if [ -f /tmp/skip_timer ]; then
+            echo -e "\nSkip signal received! Ending Session 1 and saving backup..."
+            sudo rm -f /tmp/skip_timer
+            break
+          fi
+          HOURS=$((TOTAL_SECONDS / 3600))
+          MINS=$(((TOTAL_SECONDS % 3600) / 60))
+          SECS=$((TOTAL_SECONDS % 60))
+          printf "\rTime remaining in Session 1: %02d:%02d:%02d" $HOURS $MINS $SECS
+          sleep 5
+          TOTAL_SECONDS=$((TOTAL_SECONDS - 5))
+        done
+
+    - name: Backup Workspace
+      if: always()
+      run: |
+        cd /home/6amirreza6
+        sudo tar -czf /tmp/workspace-backup.tar.gz workspace/ || true
+
+    - name: Upload Workspace Artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: workspace-backup-s1
+        path: /tmp/workspace-backup.tar.gz
+        retention-days: 1
+
+    - name: Cleanup Tailscale Node
+      if: always()
+      run: |
+        sudo tailscale logout || true
+
+  session-2:
+    needs: session-1
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set Up User
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_ID: ${{ github.run_id }}
+        REPO: ${{ github.repository }}
+      run: |
+        echo "runner:root" | sudo chpasswd
+        sudo useradd -m -s /bin/bash root || true
+        echo "root:root" | sudo chpasswd
+        sudo usermod -aG sudo root
+        sudo mkdir -p /home/6amirreza6/workspace
+        echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
+        sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
+        sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config || true
+        echo "PasswordAuthentication yes" | sudo tee /etc/ssh/sshd_config.d/99-password-auth.conf || true
+        sudo systemctl restart ssh || sudo service ssh restart || true
+
+        sudo bash -c "cat << 'EOF' > /usr/local/bin/stop-all
+        #!/bin/bash
+        echo 'Canceling all sessions and stopping workflow...'
+        curl -s -X POST -H 'Authorization: token $GH_TOKEN' -H 'Accept: application/vnd.github.v3+json' 'https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/cancel'
+        sleep 4
+        sudo pkill -9 -f sleep || true
+        EOF"
+        sudo chmod +x /usr/local/bin/stop-all
+
+    - name: Download Workspace Artifact
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: workspace-backup-s1
+        path: /tmp/
+
+    - name: Restore Workspace Data
+      run: |
+        if [ -f /tmp/workspace-backup.tar.gz ]; then
+          echo "Restoring backup from Session 1..."
+          sudo tar -xzf /tmp/workspace-backup.tar.gz -C /home/6amirreza6/
+          sudo rm /tmp/workspace-backup.tar.gz
+        elif [ -f workspace-backup.tar.gz ]; then
+          echo "Restoring initial backup from Repository file..."
+          sudo tar -xzf workspace-backup.tar.gz -C /home/6amirreza6/
+        else
+          echo "No backup file found, starting with empty workspace."
+        fi
+        sudo chown -R root:root /home/6amirreza6/workspace
+
+    - name: Connect Tailscale
+      env:
+        TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      run: |
+        curl -fsSL https://tailscale.com/install.sh | sh
+        sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session2-run-${{ github.run_id }}"
+        
+        echo "در حال تثبیت شبکه Tailscale..."
+        sleep 10
+        
+        TS_IP=$(tailscale ip -4)
+        echo "=========================================="
+        echo "SSH Connection Details (Session 2):"
+        echo "IP: $TS_IP"
+        echo "User: root"
+        echo "Password: root"
+        echo "SSH Command: ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o StrictHostKeyChecking=no root@$TS_IP"
+        echo "To stop ALL sessions type: stop-all"
+        echo "To skip to NEXT session type: touch /tmp/skip_timer"
+        echo "=========================================="
+
+    - name: Keep Alive & Live Timer (5.5 Hours)
+      run: |
+        TOTAL_SECONDS=19800
+        while [ $TOTAL_SECONDS -gt 0 ]; do
+          if [ -f /tmp/skip_timer ]; then
+            echo -e "\nSkip signal received! Ending Session 2 and saving backup..."
+            sudo rm -f /tmp/skip_timer
+            break
+          fi
+          HOURS=$((TOTAL_SECONDS / 3600))
+          MINS=$(((TOTAL_SECONDS % 3600) / 60))
+          SECS=$((TOTAL_SECONDS % 60))
+          printf "\rTime remaining in Session 2: %02d:%02d:%02d" $HOURS $MINS $SECS
+          sleep 5
+          TOTAL_SECONDS=$((TOTAL_SECONDS - 5))
+        done
+
+    - name: Backup Workspace
+      if: always()
+      run: |
+        cd /home/6amirreza6
+        sudo tar -czf /tmp/workspace-backup.tar.gz workspace/ || true
+
+    - name: Upload Workspace Artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: workspace-backup-s2
+        path: /tmp/workspace-backup.tar.gz
+        retention-days: 1
+
+    - name: Cleanup Tailscale Node
+      if: always()
+      run: |
+        sudo tailscale logout || true
+
+  session-3:
+    needs: session-2
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set Up User
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_ID: ${{ github.run_id }}
+        REPO: ${{ github.repository }}
+      run: |
+        echo "runner:root" | sudo chpasswd
+        sudo useradd -m -s /bin/bash root || true
+        echo "root:root" | sudo chpasswd
+        sudo usermod -aG sudo root
+        sudo mkdir -p /home/6amirreza6/workspace
+        echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
+        sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
+        sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config || true
+        echo "PasswordAuthentication yes" | sudo tee /etc/ssh/sshd_config.d/99-password-auth.conf || true
+        sudo systemctl restart ssh || sudo service ssh restart || true
+
+        sudo bash -c "cat << 'EOF' > /usr/local/bin/stop-all
+        #!/bin/bash
+        echo 'Canceling all sessions and stopping workflow...'
+        curl -s -X POST -H 'Authorization: token $GH_TOKEN' -H 'Accept: application/vnd.github.v3+json' 'https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/cancel'
+        sleep 4
+        sudo pkill -9 -f sleep || true
+        EOF"
+        sudo chmod +x /usr/local/bin/stop-all
+
+    - name: Download Workspace Artifact
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: workspace-backup-s2
+        path: /tmp/
+
+    - name: Restore Workspace Data
+      run: |
+        if [ -f /tmp/workspace-backup.tar.gz ]; then
+          echo "Restoring backup from Session 2..."
+          sudo tar -xzf /tmp/workspace-backup.tar.gz -C /home/6amirreza6/
+          sudo rm /tmp/workspace-backup.tar.gz
+        elif [ -f workspace-backup.tar.gz ]; then
+          echo "Restoring initial backup from Repository file..."
+          sudo tar -xzf workspace-backup.tar.gz -C /home/6amirreza6/
+        else
+          echo "No backup file found, starting with empty workspace."
+        fi
+        sudo chown -R root:root /home/6amirreza6/workspace
+
+    - name: Connect Tailscale
+      env:
+        TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      run: |
+        curl -fsSL https://tailscale.com/install.sh | sh
+        sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session3-run-${{ github.run_id }}"
+        
+        echo "در حال تثبیت شبکه Tailscale..."
+        sleep 10
+        
+        TS_IP=$(tailscale ip -4)
+        echo "=========================================="
+        echo "SSH Connection Details (Session 3):"
+        echo "IP: $TS_IP"
+        echo "User: root"
+        echo "Password: root"
+        echo "SSH Command: ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o StrictHostKeyChecking=no root@$TS_IP"
+        echo "To stop ALL sessions type: stop-all"
+        echo "To skip to NEXT session type: touch /tmp/skip_timer"
+        echo "=========================================="
+
+    - name: Keep Alive & Live Timer (5.5 Hours)
+      run: |
+        TOTAL_SECONDS=19800
+        while [ $TOTAL_SECONDS -gt 0 ]; do
+          if [ -f /tmp/skip_timer ]; then
+            echo -e "\nSkip signal received! Ending Session 3 and saving backup..."
+            sudo rm -f /tmp/skip_timer
+            break
+          fi
+          HOURS=$((TOTAL_SECONDS / 3600))
+          MINS=$(((TOTAL_SECONDS % 3600) / 60))
+          SECS=$((TOTAL_SECONDS % 60))
+          printf "\rTime remaining in Session 3: %02d:%02d:%02d" $HOURS $MINS $SECS
+          sleep 5
+          TOTAL_SECONDS=$((TOTAL_SECONDS - 5))
+        done
+
+    - name: Backup Workspace
+      if: always()
+      run: |
+        cd /home/6amirreza6
+        sudo tar -czf /tmp/workspace-backup.tar.gz workspace/ || true
+
+    - name: Upload Workspace Artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: workspace-backup-s3
+        path: /tmp/workspace-backup.tar.gz
+        retention-days: 1
+
+    - name: Cleanup Tailscale Node
+      if: always()
+      run: |
+        sudo tailscale logout || true
+
+  session-4:
+    needs: session-3
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set Up User
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_ID: ${{ github.run_id }}
+        REPO: ${{ github.repository }}
+      run: |
+        echo "runner:root" | sudo chpasswd
+        sudo useradd -m -s /bin/bash root || true
+        echo "root:root" | sudo chpasswd
+        sudo usermod -aG sudo root
+        sudo mkdir -p /home/6amirreza6/workspace
+        echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
+        sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
+        sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config || true
+        echo "PasswordAuthentication yes" | sudo tee /etc/ssh/sshd_config.d/99-password-auth.conf || true
+        sudo systemctl restart ssh || sudo service ssh restart || true
+
+        sudo bash -c "cat << 'EOF' > /usr/local/bin/stop-all
+        #!/bin/bash
+        echo 'Canceling all sessions and stopping workflow...'
+        curl -s -X POST -H 'Authorization: token $GH_TOKEN' -H 'Accept: application/vnd.github.v3+json' 'https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/cancel'
+        sleep 4
+        sudo pkill -9 -f sleep || true
+        EOF"
+        sudo chmod +x /usr/local/bin/stop-all
+
+    - name: Download Workspace Artifact
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: workspace-backup-s3
+        path: /tmp/
+
+    - name: Restore Workspace Data
+      run: |
+        if [ -f /tmp/workspace-backup.tar.gz ]; then
+          echo "Restoring backup from Session 3..."
+          sudo tar -xzf /tmp/workspace-backup.tar.gz -C /home/6amirreza6/
+          sudo rm /tmp/workspace-backup.tar.gz
+        elif [ -f workspace-backup.tar.gz ]; then
+          echo "Restoring initial backup from Repository file..."
+          sudo tar -xzf workspace-backup.tar.gz -C /home/6amirreza6/
+        else
+          echo "No backup file found, starting with empty workspace."
+        fi
+        sudo chown -R root:root /home/6amirreza6/workspace
+
+    - name: Connect Tailscale
+      env:
+        TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      run: |
+        curl -fsSL https://tailscale.com/install.sh | sh
+        sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session4-run-${{ github.run_id }}"
+        
+        echo "در حال تثبیت شبکه Tailscale..."
+        sleep 10
+        
+        TS_IP=$(tailscale ip -4)
+        echo "=========================================="
+        echo "SSH Connection Details (Session 4):"
+        echo "IP: $TS_IP"
+        echo "User: root"
+        echo "Password: root"
+        echo "SSH Command: ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o StrictHostKeyChecking=no root@$TS_IP"
+        echo "To stop ALL sessions type: stop-all"
+        echo "To skip to NEXT session type: touch /tmp/skip_timer"
+        echo "=========================================="
+
+    - name: Keep Alive & Live Timer (5.5 Hours)
+      run: |
+        TOTAL_SECONDS=19800
+        while [ $TOTAL_SECONDS -gt 0 ]; do
+          if [ -f /tmp/skip_timer ]; then
+            echo -e "\nSkip signal received! Ending Session 4 and saving backup..."
+            sudo rm -f /tmp/skip_timer
+            break
+          fi
+          HOURS=$((TOTAL_SECONDS / 3600))
+          MINS=$(((TOTAL_SECONDS % 3600) / 60))
+          SECS=$((TOTAL_SECONDS % 60))
+          printf "\rTime remaining in Session 4: %02d:%02d:%02d" $HOURS $MINS $SECS
+          sleep 5
+          TOTAL_SECONDS=$((TOTAL_SECONDS - 5))
+        done
+
+    - name: Backup Workspace
+      if: always()
+      run: |
+        cd /home/6amirreza6
+        sudo tar -czf /tmp/workspace-backup.tar.gz workspace/ || true
+
+    - name: Upload Workspace Artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: workspace-backup-s4
+        path: /tmp/workspace-backup.tar.gz
+        retention-days: 1
+
+    - name: Cleanup Tailscale Node
+      if: always()
+      run: |
+        sudo tailscale logout || true
+
+  session-5:
+    needs: session-4
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set Up User
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_ID: ${{ github.run_id }}
+        REPO: ${{ github.repository }}
+      run: |
+        echo "runner:root" | sudo chpasswd
+        sudo useradd -m -s /bin/bash root || true
+        echo "root:root" | sudo chpasswd
+        sudo usermod -aG sudo root
+        sudo mkdir -p /home/6amirreza6/workspace
+        echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
+        sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
+        sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config || true
+        echo "PasswordAuthentication yes" | sudo tee /etc/ssh/sshd_config.d/99-password-auth.conf || true
+        sudo systemctl restart ssh || sudo service ssh restart || true
+
+        sudo bash -c "cat << 'EOF' > /usr/local/bin/stop-all
+        #!/bin/bash
+        echo 'Canceling all sessions and stopping workflow...'
+        curl -s -X POST -H 'Authorization: token $GH_TOKEN' -H 'Accept: application/vnd.github.v3+json' 'https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/cancel'
+        sleep 4
+        sudo pkill -9 -f sleep || true
+        EOF"
+        sudo chmod +x /usr/local/bin/stop-all
+
+    - name: Download Workspace Artifact
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: workspace-backup-s4
+        path: /tmp/
+
+    - name: Restore Workspace Data
+      run: |
+        if [ -f /tmp/workspace-backup.tar.gz ]; then
+          echo "Restoring backup from Session 4..."
+          sudo tar -xzf /tmp/workspace-backup.tar.gz -C /home/6amirreza6/
+          sudo rm /tmp/workspace-backup.tar.gz
+        elif [ -f workspace-backup.tar.gz ]; then
+          echo "Restoring initial backup from Repository file..."
+          sudo tar -xzf workspace-backup.tar.gz -C /home/6amirreza6/
+        else
+          echo "No backup file found, starting with empty workspace."
+        fi
+        sudo chown -R root:root /home/6amirreza6/workspace
+
+    - name: Connect Tailscale
+      env:
+        TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      run: |
+        curl -fsSL https://tailscale.com/install.sh | sh
+        sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session5-run-${{ github.run_id }}"
+        
+        echo "در حال تثبیت شبکه Tailscale..."
+        sleep 10
+        
+        TS_IP=$(tailscale ip -4)
+        echo "=========================================="
+        echo "SSH Connection Details (Session 5):"
+        echo "IP: $TS_IP"
+        echo "User: root"
+        echo "Password: root"
+        echo "SSH Command: ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o StrictHostKeyChecking=no root@$TS_IP"
+        echo "To stop ALL sessions type: stop-all"
+        echo "To skip to NEXT session type: touch /tmp/skip_timer"
+        echo "=========================================="
+
+    - name: Keep Alive & Live Timer (5.5 Hours)
+      run: |
+        TOTAL_SECONDS=19800
+        while [ $TOTAL_SECONDS -gt 0 ]; do
+          if [ -f /tmp/skip_timer ]; then
+            echo -e "\nSkip signal received! Ending Session 5 and saving backup..."
