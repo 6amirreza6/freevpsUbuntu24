@@ -25,14 +25,14 @@ jobs:
         echo "runner:root" | sudo chpasswd
         sudo useradd -m -s /bin/bash root || true
         echo "root:root" | sudo chpasswd
-        sudo usermod -aG sudo root
+        sudo usermod -aG sudo root || true
         sudo mkdir -p /home/6amirreza6/workspace
         echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
         sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
         sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config || true
         echo "PasswordAuthentication yes" | sudo tee /etc/ssh/sshd_config.d/99-password-auth.conf || true
         sudo systemctl restart ssh || sudo service ssh restart || true
-        
+
         # Create stop-all command with delay for proper cancellation
         sudo bash -c "cat << 'EOF' > /usr/local/bin/stop-all
         #!/bin/bash
@@ -59,10 +59,10 @@ jobs:
       run: |
         curl -fsSL https://tailscale.com/install.sh | sh
         sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session1-run-${{ github.run_id }}"
-        
+
         echo "در حال تثبیت شبکه Tailscale..."
         sleep 10
-        
+
         TS_IP=$(tailscale ip -4)
         echo "=========================================="
         echo "SSH Connection Details (Session 1):"
@@ -129,7 +129,7 @@ jobs:
         echo "runner:root" | sudo chpasswd
         sudo useradd -m -s /bin/bash root || true
         echo "root:root" | sudo chpasswd
-        sudo usermod -aG sudo root
+        sudo usermod -aG sudo root || true
         sudo mkdir -p /home/6amirreza6/workspace
         echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
         sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
@@ -173,10 +173,10 @@ jobs:
       run: |
         curl -fsSL https://tailscale.com/install.sh | sh
         sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session2-run-${{ github.run_id }}"
-        
+
         echo "در حال تثبیت شبکه Tailscale..."
         sleep 10
-        
+
         TS_IP=$(tailscale ip -4)
         echo "=========================================="
         echo "SSH Connection Details (Session 2):"
@@ -243,7 +243,7 @@ jobs:
         echo "runner:root" | sudo chpasswd
         sudo useradd -m -s /bin/bash root || true
         echo "root:root" | sudo chpasswd
-        sudo usermod -aG sudo root
+        sudo usermod -aG sudo root || true
         sudo mkdir -p /home/6amirreza6/workspace
         echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
         sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
@@ -287,10 +287,10 @@ jobs:
       run: |
         curl -fsSL https://tailscale.com/install.sh | sh
         sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session3-run-${{ github.run_id }}"
-        
+
         echo "در حال تثبیت شبکه Tailscale..."
         sleep 10
-        
+
         TS_IP=$(tailscale ip -4)
         echo "=========================================="
         echo "SSH Connection Details (Session 3):"
@@ -357,7 +357,7 @@ jobs:
         echo "runner:root" | sudo chpasswd
         sudo useradd -m -s /bin/bash root || true
         echo "root:root" | sudo chpasswd
-        sudo usermod -aG sudo root
+        sudo usermod -aG sudo root || true
         sudo mkdir -p /home/6amirreza6/workspace
         echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
         sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
@@ -401,10 +401,10 @@ jobs:
       run: |
         curl -fsSL https://tailscale.com/install.sh | sh
         sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session4-run-${{ github.run_id }}"
-        
+
         echo "در حال تثبیت شبکه Tailscale..."
         sleep 10
-        
+
         TS_IP=$(tailscale ip -4)
         echo "=========================================="
         echo "SSH Connection Details (Session 4):"
@@ -471,7 +471,7 @@ jobs:
         echo "runner:root" | sudo chpasswd
         sudo useradd -m -s /bin/bash root || true
         echo "root:root" | sudo chpasswd
-        sudo usermod -aG sudo root
+        sudo usermod -aG sudo root || true
         sudo mkdir -p /home/6amirreza6/workspace
         echo "cd /home/6amirreza6/workspace" | sudo tee -a /root/.bashrc > /dev/null
         sudo chown -R root:root /home/6amirreza6/workspace /root/.bashrc
@@ -515,10 +515,10 @@ jobs:
       run: |
         curl -fsSL https://tailscale.com/install.sh | sh
         sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="session5-run-${{ github.run_id }}"
-        
+
         echo "در حال تثبیت شبکه Tailscale..."
         sleep 10
-        
+
         TS_IP=$(tailscale ip -4)
         echo "=========================================="
         echo "SSH Connection Details (Session 5):"
@@ -536,3 +536,5 @@ jobs:
         while [ $TOTAL_SECONDS -gt 0 ]; do
           if [ -f /tmp/skip_timer ]; then
             echo -e "\nSkip signal received! Ending Session 5 and saving backup..."
+            sudo rm -f /tmp/skip_timer
+        
